@@ -28,8 +28,23 @@ int thread_fork_child()
 
 extern "C" uintptr_t __security_cookie;
 
+__declspec(naked)
+__forceinline DWORD getEBP()
+{
+	__asm { mov eax, ebp
+		ret
+	}
+}
+
 DWORD WINAPI JoinThread(LPVOID lpParam)
 {
+	LPDWORD pOriginalStackFrame = 0, pNewStackFrame = 0;
+
+#ifndef __WIN64
+	pOriginalStackFrame = (LPDWORD)getEBP();
+#else
+#endif
+
 	WORKER_PARAM *parent = (WORKER_PARAM *)lpParam;
 
 	HANDLE hParent = OpenThread(THREAD_ALL_ACCESS, FALSE, parent->dwParentThreadId);
@@ -49,13 +64,13 @@ DWORD WINAPI JoinThread(LPVOID lpParam)
 
 	DWORD dwEBP = parent->ParentEBP;
 
-	DebugBreak();
 	MEMORY_BASIC_INFORMATION buffer = {};
 	VirtualQuery((LPCVOID)dwEBP, &buffer, sizeof(MEMORY_BASIC_INFORMATION));
 
 	SIZE_T unused = dwEBP - (DWORD)buffer.BaseAddress;
-	SIZE_T endAddress = (SIZE_T)buffer.BaseAddress + buffer.RegionSize;
-	SIZE_T transfer = endAddress - (SIZE_T)dwEBP;
+	SIZE_T baseStack = dwEBP - (DWORD)buffer.BaseAddress;
+	SIZE_T endStack = (SIZE_T)buffer.BaseAddress + buffer.RegionSize;
+	SIZE_T transfer = endStack - (SIZE_T)dwEBP;
 	SIZE_T topStack = parent->ChildTopESP;
 
 
@@ -87,35 +102,42 @@ DWORD WINAPI JoinThread(LPVOID lpParam)
 		shr ecx, 2
 		rep movsd			// copy parent thread stack in our space!
 
+		mov eax, [ebp]		// get EBP
+		sub eax, ebp
+		sub[ebp], eax
+
 	}
 #else
 
+#endif
+
+#ifndef _WIN64
+	pNewStackFrame = (LPDWORD)getEBP();
+	pNewStackFrame += 3;	// skip ebp, skip ret, skip arg...
+	
+	while (pNewStackFrame < (LPDWORD) parent->ChildTopESP) {
+		if (*pNewStackFrame >= baseStack && *pNewStackFrame <= endStack) {
+			*pNewStackFrame -= dwEBP;
+			*pNewStackFrame += getEBP() + 0x0c;
+		}
+
+		pNewStackFrame++;
+	}
+
+	DebugBreak();
+#else
 #endif
 
 	parent->bUnlocked = TRUE;
 
 	ResumeThread(hParent);
 
-	/* fix in our stack the TOP LIST */
-#ifndef _WIN64
-	__asm {
-		mov edi, [topStack]
-		mov esi, ebp
-
-stack_frame:
-		cmp esi, edi
-		// jb stack_frame	// there are more stack frame!
-	}
-#else
-#endif
-
 #ifndef _WIN64
 	__asm {
 		mov esp, ebp
+		add esp, 0x0c
+		mov esp, [esp]
 		pop ebp
-		mov eax, [esp]
-		add esp, 8
-		push eax
 		mov eax, 1
 		ret
 	}
@@ -160,8 +182,8 @@ int thread_fork()
 
 	ResumeThread(hThread);
 	while (w.bUnlocked == FALSE) {
-		OutputDebugStringA("Locked....");
-		Sleep(100);	// wait...
+		//OutputDebugStringA("Locked....");
+		//Sleep(100);	// wait...
 	}
 
 	return 0;
