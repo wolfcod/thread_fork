@@ -64,9 +64,8 @@ DWORD WINAPI JoinThread(LPVOID lpParam)
 #else
 #endif
 
-
 	parent->bUnlocked = TRUE;
-
+	ResumeThread(hParent);
 /*#ifndef _WIN64
 	__asm {
 		mov esi, esp
@@ -84,7 +83,7 @@ DWORD WINAPI JoinThread(LPVOID lpParam)
 #else
 #endif*/
 
-	//ResumeThread(hParent);
+	ResumeThread(hParent);
 
 #ifndef _WIN64
 	__asm {
@@ -150,6 +149,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	}
 	else {
 		OutputDebugStringA("I'm in child thread!");
+		ExitThread(0);
 	}
 
 	Sleep(10000);

@@ -8,7 +8,7 @@ thread_fork() is an experiment of avoiding to start a child thread;
 Example:
 
 main thread:
-int *buffer = malloc(sizeof(int) * 1024 * 1024);	// 1millions of integer
+int *buffer = malloc(sizeof(int) * 1024 * 1024);    *// 1millions of integer*{:style="color: green" }
 
 if (thread_fork() != 0) {
 	[ child thread branch ]
