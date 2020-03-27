@@ -26,6 +26,8 @@ int thread_fork_child()
 	return 1;
 }
 
+extern "C" uintptr_t __security_cookie;
+
 DWORD WINAPI JoinThread(LPVOID lpParam)
 {
 	WORKER_PARAM *parent = (WORKER_PARAM *)lpParam;
@@ -52,38 +54,60 @@ DWORD WINAPI JoinThread(LPVOID lpParam)
 	VirtualQuery((LPCVOID)dwEBP, &buffer, sizeof(MEMORY_BASIC_INFORMATION));
 
 	SIZE_T unused = dwEBP - (DWORD)buffer.BaseAddress;
-	SIZE_T stackToCopy = buffer.RegionSize - unused;
+	SIZE_T endAddress = (SIZE_T)buffer.BaseAddress + buffer.RegionSize;
+	SIZE_T transfer = endAddress - (SIZE_T)dwEBP;
+	SIZE_T topStack = parent->ChildTopESP;
+
 
 	/** change return address of this function */
 #ifndef _WIN64
 	__asm {
-		mov eax, [dwEBP]
-		mov eax, [eax+4]
-		mov [ebp+4], eax
-	}	 
+		mov ecx, ebp
+		add ecx, 0x0c			// three arguments
+		sub ecx, esp			// number of bytes to move (from ESP to EBP+08)
+
+		mov edi, [topStack]	// my topStack
+		sub edi, [transfer]	// topStack - transfer
+
+		sub edi, ecx
+		mov eax, ecx
+		mov ebx, ebp
+
+		mov esi, esp
+		rep movsb			// transfer bytes from stack
+		sub edi, eax
+		mov esp, edi
+		mov ebp, edi
+		add ebp, eax
+		sub ebp, 0x0c		// sub ebp { ebp, ret, arg }
+
+		mov	ecx, [transfer]
+		lea edi, [ebp + 0x0c]
+		mov esi, [dwEBP]
+		shr ecx, 2
+		rep movsd			// copy parent thread stack in our space!
+
+	}
 #else
+
 #endif
 
 	parent->bUnlocked = TRUE;
-	ResumeThread(hParent);
-/*#ifndef _WIN64
-	__asm {
-		mov esi, esp
-		mov eax, stackToCopy
-		mov edi, esi
-		sub edi, eax
-		mov ebx, edi
-		mov ecx, ebp
-		add ecx, 8
-		sub ecx, esi
-		sub ebp, ecx
-		rep movsb
-		mov esp, ebx
-	}
-#else
-#endif*/
 
 	ResumeThread(hParent);
+
+	/* fix in our stack the TOP LIST */
+#ifndef _WIN64
+	__asm {
+		mov edi, [topStack]
+		mov esi, ebp
+
+stack_frame:
+		cmp esi, edi
+		// jb stack_frame	// there are more stack frame!
+	}
+#else
+#endif
 
 #ifndef _WIN64
 	__asm {
@@ -92,6 +116,7 @@ DWORD WINAPI JoinThread(LPVOID lpParam)
 		mov eax, [esp]
 		add esp, 8
 		push eax
+		mov eax, 1
 		ret
 	}
 #else
@@ -101,12 +126,13 @@ DWORD WINAPI JoinThread(LPVOID lpParam)
 
 int thread_fork()
 {
+	
 	WORKER_PARAM w;
 	DWORD dwThreadId;
 
 #ifndef _WIN64
 	__asm {
-		mov [w.ParentEBP], ebp
+		mov [w.ParentEBP], esp
 	}
 #else
 #endif
@@ -115,6 +141,8 @@ int thread_fork()
 	w.dwTag = 'THF\0';
 	w.bUnlocked = FALSE;
 	
+	OutputDebugStringA("Breakpoint before fork...()");
+	DebugBreak();
 	HANDLE hThread = CreateThread(NULL, 0, JoinThread, &w, CREATE_SUSPENDED, &dwThreadId);
 
 	CONTEXT context;
