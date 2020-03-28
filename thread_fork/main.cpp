@@ -18,7 +18,7 @@ typedef struct
 		return (LPVOID) this;
 	}
 
-	BOOL bUnlocked;
+	BYTE bStatus;
 } WORKER_PARAM;
 
 int thread_fork_child()
@@ -111,10 +111,15 @@ DWORD WINAPI JoinThread(LPVOID lpParam)
 
 #endif
 
+	DebugBreak();
+	parent->bStatus = 1;
+	ResumeThread(hParent);
+
 #ifndef _WIN64
 	pNewStackFrame = (LPDWORD)getEBP();
-	pNewStackFrame += 3;	// skip ebp, skip ret, skip arg...
+	pNewStackFrame += 2;	// skip ebp, skip ret
 	
+	// now ARGUMENT must point to our local copy!
 	while (pNewStackFrame < (LPDWORD) parent->ChildTopESP) {
 		if (*pNewStackFrame >= baseStack && *pNewStackFrame <= endStack) {
 			*pNewStackFrame -= dwEBP;
@@ -123,27 +128,28 @@ DWORD WINAPI JoinThread(LPVOID lpParam)
 
 		pNewStackFrame++;
 	}
+	parent = NULL;	// force to null
+	parent = (WORKER_PARAM *)lpParam;	// reassign param with argument..
 
 	DebugBreak();
 #else
 #endif
-
-	parent->bUnlocked = TRUE;
-
-	ResumeThread(hParent);
+	parent->bStatus = 2;
 
 #ifndef _WIN64
 	__asm {
+		mov eax, __security_cookie
+		lea ebp, [ebp + 0x0c] // load original stack frame...
+		xor eax, ebp
+		mov [ebp-4], eax	// assign a new check stack..
 		mov esp, ebp
-		add esp, 0x0c
-		mov esp, [esp]
 		pop ebp
 		mov eax, 1
 		ret
 	}
 #else
-	return 1;
 #endif
+	return ;
 }
 
 int thread_fork()
@@ -152,16 +158,11 @@ int thread_fork()
 	WORKER_PARAM w;
 	DWORD dwThreadId;
 
-#ifndef _WIN64
-	__asm {
-		mov [w.ParentEBP], esp
-	}
-#else
-#endif
+	w.ParentEBP = getEBP();
 
 	w.dwParentThreadId = GetCurrentThreadId();
 	w.dwTag = 'THF\0';
-	w.bUnlocked = FALSE;
+	w.bStatus = 0;
 	
 	OutputDebugStringA("Breakpoint before fork...()");
 	DebugBreak();
@@ -181,9 +182,13 @@ int thread_fork()
 	w.ChildLowESP = (DWORD) buffer.BaseAddress;
 
 	ResumeThread(hThread);
-	while (w.bUnlocked == FALSE) {
+	while (w.bStatus == 0) {
 		//OutputDebugStringA("Locked....");
 		//Sleep(100);	// wait...
+	}
+	
+	if (w.bStatus == 2) { // this condition is TRUE on child thread!
+		return 1;
 	}
 
 	return 0;
